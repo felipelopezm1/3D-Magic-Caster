@@ -1,0 +1,43 @@
+# Dependencies
+node_modules/
+frontend/node_modules/
+backend/node_modules/
+backend/.venv/
+__pycache__/
+*.pyc
+
+# Build
+frontend/dist/
+backend/dist/
+*.tsbuildinfo
+
+# Exports (Blender output); keep directory
+exports/*
+!exports/.gitkeep
+
+# Uploaded reference images (per-session)
+backend/uploads/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+.cursor/
+*.swp
+*.swo
+
+# Misc
+*.local
+.cache/
