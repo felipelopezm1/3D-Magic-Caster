@@ -35,82 +35,145 @@ def _load_reference_image(session: dict[str, Any]) -> list[dict] | None:
     return [{"type": "image", "source": {"type": "base64", "media_type": mime, "data": data}}]
 
 
+def _get_ref_abs_path(session: dict[str, Any]) -> str | None:
+    """Return the absolute path to the reference image, if it exists on disk."""
+    ref = session.get("referenceImagePath")
+    if not ref:
+        return None
+    p = Path(ref)
+    return str(p.resolve()) if p.exists() else None
+
+
 def _build_generation_system(session: dict[str, Any]) -> str:
-    """Build a poly-level and subject-aware system prompt for variant generation."""
+    """Build an integration-aware system prompt for variant generation."""
     laf = session.get("lookAndFeel") or {}
     ctx = session.get("context") or {}
     poly = laf.get("polyLevel", "low")
+    gen_method = laf.get("generationMethod", "auto")
     style = laf.get("style", "")
     vibe = laf.get("vibe", "")
     subject = ctx.get("subject", "character")
     is_human = ctx.get("isHuman", False)
     pose = ctx.get("posePosition", "")
+    desc = ctx.get("description", "")
+    has_ref = bool(session.get("referenceImagePath"))
 
     base = (
-        "You are an expert 3D modeler controlling Blender via MCP tools. "
-        "Create 3 distinct variants of the requested model, each with meaningfully different "
-        "shapes, proportions, or poses. For each variant: build the model, then call "
-        "get_viewport_screenshot (max_size=800). Work on one variant at a time.\n\n"
+        "You are an expert 3D modeler controlling Blender via MCP tools.\n"
+        "Your goal: create 3 distinct variants of the requested model.\n"
+        "For each variant, build or generate the model, then call "
+        "get_viewport_screenshot(max_size=800). Work one variant at a time.\n\n"
     )
 
-    if poly == "high":
+    # --- Integration-aware generation strategy ---
+    if gen_method == "scripted":
         base += (
-            "QUALITY LEVEL: HIGH POLY — production quality.\n"
-            "- Use subdivision surface modifiers (level 2-3) for smooth, organic forms.\n"
-            "- Add proper edge loops for anatomy, musculature, and realistic proportions.\n"
-            "- Create detailed features: fingers, facial structure, clothing folds, accessories.\n"
-            "- Use multiple mesh objects for complex parts (body, head, clothing, weapons).\n"
-            "- Ensure clean topology with quad-dominant mesh.\n"
-            "- Add depth through extruded details, beveled edges, and layered geometry.\n\n"
+            "GENERATION METHOD: SCRIPTED (manual Blender Python code).\n"
+            "Build the model using execute_blender_code. Do NOT use AI generation APIs.\n\n"
         )
-    elif poly == "mixed":
+    elif gen_method == "library":
         base += (
-            "QUALITY LEVEL: MIXED POLY — detailed where it matters, simplified elsewhere.\n"
-            "- Use higher poly count on focal areas (face, hands, key features).\n"
-            "- Keep supporting geometry (base body, simple clothing) at medium detail.\n"
-            "- Use subdivision on hero parts only.\n"
-            "- Balance visual quality with efficient geometry.\n\n"
+            "GENERATION METHOD: LIBRARY SEARCH.\n"
+            "STRATEGY:\n"
+            "1. Check get_sketchfab_status() to see if Sketchfab is available.\n"
+            "2. If available: search_sketchfab_models() for models matching the description, "
+            "then download_sketchfab_model() for the best match.\n"
+            "3. Also check get_polyhaven_status() for Poly Haven models.\n"
+            "4. After importing, use execute_blender_code to adjust scale, position, and rotation.\n"
+            "5. If no suitable library model is found, fall back to AI generation or scripting.\n"
+            "6. For each variant, try a different search query or model to get variety.\n\n"
         )
     else:
         base += (
-            "QUALITY LEVEL: LOW POLY — stylized game-ready models.\n"
-            "- Keep vertex counts low, embrace the faceted aesthetic.\n"
-            "- Use simple geometric shapes as building blocks.\n"
-            "- Charm comes from proportions and silhouette, not detail.\n\n"
+            "GENERATION STRATEGY (follow this priority order):\n\n"
+            "1. FIRST, check what integrations are available by calling:\n"
+            "   - get_hyper3d_status()\n"
+            "   - get_hunyuan3d_status()\n"
+            "   - get_sketchfab_status()\n"
+            "   - get_polyhaven_status()\n\n"
+            "2. USE AI 3D GENERATION when available (produces far better results than scripting):\n"
+            "   a) Hyper3D/Rodin (preferred for characters and single objects):\n"
+            "      - Text: generate_hyper3d_model_via_text(text_prompt=...)\n"
+            "      - Image: generate_hyper3d_model_via_images(input_image_paths=[...])\n"
+            "      - Then poll_rodin_job_status() until complete\n"
+            "      - Then import_generated_asset() to bring it into Blender\n"
+            "      - The generated model has built-in materials and normalized size\n"
+            "      - After import, ALWAYS check world_bounding_box and adjust scale/position\n"
+            "   b) Hunyuan3D (alternative):\n"
+            "      - generate_hunyuan3d_model(text_prompt=...) or with image\n"
+            "      - poll_hunyuan_job_status() until done\n"
+            "      - import_generated_asset_hunyuan()\n\n"
+            "3. USE LIBRARY SEARCH for existing real-world objects:\n"
+            "   - Sketchfab: search_sketchfab_models() then download_sketchfab_model()\n"
+            "   - Poly Haven: search_polyhaven_assets() then download_polyhaven_asset()\n\n"
+            "4. FALL BACK TO SCRIPTING only when:\n"
+            "   - All AI generation tools are disabled/unavailable\n"
+            "   - A simple primitive is requested\n"
+            "   - AI generation failed\n\n"
+            "5. AFTER generation/import, use execute_blender_code for:\n"
+            "   - Adjusting scale, position, rotation\n"
+            "   - Combining parts, adding accessories\n"
+            "   - Posing (if applicable)\n\n"
+            "IMPORTANT: For each of the 3 variants, vary the text prompt or search query "
+            "to get meaningfully different results. Clear the scene between variants.\n\n"
         )
 
+    # --- Reference image instructions ---
+    if has_ref:
+        ref_path = _get_ref_abs_path(session)
+        if ref_path:
+            base += (
+                "REFERENCE IMAGE AVAILABLE:\n"
+                f"The user uploaded a reference image at: {ref_path}\n"
+                "- If Hyper3D is available, use generate_hyper3d_model_via_images("
+                f'input_image_paths=["{ref_path}"]) for at least one variant.\n'
+                "- For other variants, use text-based generation with descriptions inspired by the reference.\n"
+                "- The reference image is also shown to you directly for visual context.\n\n"
+            )
+
+    # --- Poly level ---
+    if poly == "high":
+        base += (
+            "QUALITY LEVEL: HIGH POLY — production quality.\n"
+            "- When using AI generation, this is handled automatically.\n"
+            "- When scripting: use subdivision surface modifiers (level 2-3), "
+            "proper edge loops, detailed anatomy, quad-dominant mesh.\n\n"
+        )
+    elif poly == "mixed":
+        base += (
+            "QUALITY LEVEL: MIXED POLY — detailed where it matters.\n"
+            "- When using AI generation, request detailed models.\n"
+            "- When scripting: high detail on focal areas, medium elsewhere.\n\n"
+        )
+    else:
+        base += (
+            "QUALITY LEVEL: LOW POLY — stylized game-ready.\n"
+            "- When using AI generation, add 'low poly' to the prompt.\n"
+            "- When scripting: embrace faceted aesthetic, simple shapes.\n\n"
+        )
+
+    # --- Subject-specific ---
     if is_human and subject == "character":
         base += (
-            "HUMANOID CHARACTER GUIDELINES:\n"
-            "- Start with a properly proportioned base body (7-8 heads tall for realistic, "
-            "3-4 heads for chibi/stylized).\n"
-            "- Build the body in anatomical sections: torso, limbs, head.\n"
-            "- For the torso: create a tapered cylinder, scale for chest/waist/hip ratio.\n"
-            "- For limbs: use cylinders with proper joint placement (shoulder, elbow, wrist, "
-            "hip, knee, ankle). Taper toward extremities.\n"
-            "- For the head: sphere with extruded/shaped facial features.\n"
-            "- Hands: simplified palm + finger shapes (detail depends on poly level).\n"
+            "SUBJECT: HUMANOID CHARACTER\n"
+            "- AI generation excels at humanoids — always prefer it when available.\n"
+            "- Include pose/clothing/style details in the generation prompt.\n"
         )
         if pose:
-            base += f"- POSE: Position the character in this pose: '{pose}'. Rotate limbs at joints.\n"
-        base += (
-            "- Ensure the character looks natural from the front AND side views.\n"
-            "- Each variant should differ in body proportions, stance, or clothing silhouette.\n\n"
-        )
+            base += f"- REQUESTED POSE: '{pose}'\n"
+        base += "\n"
     elif subject == "character":
-        base += (
-            "CREATURE / NON-HUMAN CHARACTER GUIDELINES:\n"
-            "- Start with the creature's core body shape (round, elongated, etc).\n"
-            "- Add distinctive features (wings, tail, horns, etc) as separate objects.\n"
-        )
+        base += "SUBJECT: CREATURE / NON-HUMAN CHARACTER\n"
         if pose:
-            base += f"- POSE: '{pose}'.\n"
-        base += "- Each variant should explore different body proportions or feature arrangements.\n\n"
+            base += f"- REQUESTED POSE: '{pose}'\n"
+        base += "\n"
 
     if style:
         base += f"STYLE: {style}\n"
     if vibe:
         base += f"VIBE/THEME: {vibe}\n"
+    if desc:
+        base += f"DESCRIPTION: {desc}\n"
 
     return base
 
@@ -123,17 +186,26 @@ def _build_materials_system(session: dict[str, Any]) -> str:
     desc = ctx.get("description", "")
 
     return (
-        "You are an expert 3D artist controlling Blender via MCP. "
+        "You are an expert 3D artist controlling Blender via MCP.\n"
         "Apply materials and shaders to every object in the current scene.\n\n"
-        "APPROACH:\n"
-        "1. First get the scene info to understand what objects exist.\n"
-        "2. For each object, create and assign a Principled BSDF material with appropriate:\n"
-        "   - Base color matching the object's intended appearance\n"
-        "   - Roughness (metallic objects ~0.2-0.4, organic ~0.6-0.9)\n"
-        "   - Metallic value where appropriate (armor, weapons = 1.0)\n"
-        "3. Use distinct materials for different parts (skin, clothing, metal, etc).\n"
-        "4. If Poly Haven textures are available, use them for surfaces that benefit from "
-        "realistic texturing (stone, wood, fabric).\n\n"
+        "STRATEGY (follow this priority):\n"
+        "1. First call get_polyhaven_status() to check if Poly Haven textures are available.\n"
+        "2. Call get_scene_info() to understand what objects exist.\n\n"
+        "IF POLY HAVEN IS AVAILABLE:\n"
+        "- Use search_polyhaven_assets(asset_type='textures', query='...') to find PBR textures.\n"
+        "- Use download_polyhaven_asset() to download and apply them.\n"
+        "- Use set_texture() to apply textures to specific objects.\n"
+        "- Match textures to the theme: metal textures for armor, fabric for clothing, etc.\n"
+        "- For environment lighting, consider downloading an HDRI.\n\n"
+        "IF POLY HAVEN IS NOT AVAILABLE (fallback):\n"
+        "- Use execute_blender_code to create Principled BSDF materials.\n"
+        "- Set base color, roughness, metallic values appropriate to each surface.\n"
+        "- Use distinct materials for different parts (skin, clothing, metal, etc).\n\n"
+        "GENERAL GUIDELINES:\n"
+        "- Metallic objects (armor, weapons): metallic=1.0, roughness=0.2-0.4\n"
+        "- Organic surfaces (skin, fabric): metallic=0.0, roughness=0.6-0.9\n"
+        "- Note: if the model was AI-generated, it may already have materials — "
+        "check first and only add/improve where needed.\n\n"
         f"THEME/VIBE: {vibe}\n"
         f"DESCRIPTION: {desc}\n"
     )
@@ -235,13 +307,24 @@ async def run_step(
 
             user_blocks: list[dict] = []
             ref_blocks = _load_reference_image(session)
+            ref_path = _get_ref_abs_path(session)
             if ref_blocks:
                 user_blocks.extend(ref_blocks)
+                ref_note = (
+                    "Here is a reference image for the model. Use it as visual guidance "
+                    "for shape, proportions, and style.\n"
+                )
+                if ref_path:
+                    ref_note += (
+                        f"The reference image file is at: {ref_path}\n"
+                        "If Hyper3D image-to-3D is available, use "
+                        f'generate_hyper3d_model_via_images(input_image_paths=["{ref_path}"]) '
+                        "for at least one variant.\n"
+                    )
                 user_blocks.append({
                     "type": "text",
                     "text": (
-                        f"Here is a reference image for the model. Use it as visual guidance "
-                        f"for shape, proportions, and style.\n\n"
+                        f"{ref_note}\n"
                         f"Session context: {clean}\n\n"
                         f"Description: {desc}\n\n"
                         f"Create 3 distinct variants and capture a viewport screenshot for each."
@@ -259,7 +342,8 @@ async def run_step(
 
             messages: list[dict] = [{"role": "user", "content": user_blocks}]
             screenshots = await _run_claude_mcp_loop(
-                mcp, client, system, messages, claude_tools, max_rounds=25,
+                mcp, client, system, messages, claude_tools,
+                max_rounds=40, max_tokens=4096,
             )
 
             update_session(session_id, {

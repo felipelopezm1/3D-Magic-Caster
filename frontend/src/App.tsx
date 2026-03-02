@@ -288,15 +288,27 @@ function LookAndFeelStep({
   onNext,
   loading,
 }: {
-  onNext: (data: { lookAndFeel: { style: string; polyLevel: string; vibe: string } }) => void;
+  onNext: (data: { lookAndFeel: { style: string; polyLevel: string; vibe: string; generationMethod: string } }) => void;
   loading: boolean;
 }) {
   const [style, setStyle] = useState("");
   const [polyLevel, setPolyLevel] = useState<"low" | "high" | "mixed">("low");
   const [vibe, setVibe] = useState("");
+  const [generationMethod, setGenerationMethod] = useState<"auto" | "scripted" | "library">("auto");
   return (
     <section>
       <h2>Look & feel</h2>
+      <p>Generation method:</p>
+      <select className="retro-select" value={generationMethod} onChange={(e) => setGenerationMethod(e.target.value as "auto" | "scripted" | "library")}>
+        <option value="auto">AI Generated (recommended)</option>
+        <option value="scripted">Scripted (legacy primitives)</option>
+        <option value="library">Library Search (Sketchfab)</option>
+      </select>
+      <p className="field-hint">
+        {generationMethod === "auto" && "Uses Hyper3D / Hunyuan3D when available for realistic meshes. Falls back to scripting if disabled."}
+        {generationMethod === "scripted" && "Builds models from Blender primitives via code. Fast but limited quality."}
+        {generationMethod === "library" && "Searches Sketchfab for existing high-quality models matching your description."}
+      </p>
       <p>Style (e.g. low-poly, stylized, realistic):</p>
       <input className="retro-input" type="text" value={style} onChange={(e) => setStyle(e.target.value)} placeholder="e.g. low-poly videogame" />
       <p>Poly level:</p>
@@ -307,7 +319,7 @@ function LookAndFeelStep({
       </select>
       <p>Vibe (e.g. dungeon, beach, studio):</p>
       <input className="retro-input" type="text" value={vibe} onChange={(e) => setVibe(e.target.value)} placeholder="e.g. dark fantasy" />
-      <button type="button" className="retro-btn primary" onClick={() => onNext({ lookAndFeel: { style, polyLevel, vibe } })} disabled={loading}>
+      <button type="button" className="retro-btn primary" onClick={() => onNext({ lookAndFeel: { style, polyLevel, vibe, generationMethod } })} disabled={loading}>
         {loading ? "Saving..." : "Next"}
       </button>
     </section>

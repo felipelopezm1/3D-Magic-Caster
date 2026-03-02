@@ -12,10 +12,14 @@ Turn text prompts (and optional reference images) into downloadable 3D models. A
 ## Features
 
 - **7-step wizard**: style & poly level, context & pose, reference image, generate 3 variants, pick one, materials & shaders, export
-- **3 poly levels**: low (stylized game-ready), high (production-quality with subdivision surfaces), mixed (detail where it matters)
+- **3 generation methods**: AI Generated (Hyper3D/Hunyuan3D), Library Search (Sketchfab), or Scripted (legacy primitives)
+- **3 poly levels**: low (stylized game-ready), high (production-quality), mixed (detail where it matters)
+- **AI 3D generation**: uses Hyper3D/Rodin or Hunyuan3D for realistic meshes with built-in materials when available
+- **Library search**: searches Sketchfab's 4M+ models and Poly Haven for production-quality assets
+- **Smart fallback**: automatically detects available integrations and picks the best generation strategy
+- **Reference image to 3D**: upload a reference image — Hyper3D can generate a mesh that resembles it directly
 - **Humanoid-aware prompts**: anatomical guidelines for human/creature characters with pose control
-- **Reference image support**: upload JPEG/PNG/WebP/GIF — Claude sees it as visual guidance for shape and style
-- **Materials & shaders**: Claude applies Principled BSDF materials with theme-aware colors (e.g. dark steel armor, warm skin tones, glowing magic)
+- **Materials & shaders**: Poly Haven PBR textures when available, Principled BSDF fallback with theme-matched colors
 - **Retro pixel UI** with easter-egg doodles (WigglyPaint / Decker aesthetic)
 - **Window controls**: pink = mini-tab, red = minimize, blue = toggle other panels
 - **Doodle Pad**: hidden drawing app when all panels are minimized (download as PNG)
@@ -98,6 +102,41 @@ curl -L "https://raw.githubusercontent.com/ahujasid/blender-mcp/main/addon.py" \
 
 > **Important**: Blender must stay open and connected during the entire session. Each wizard run communicates with Blender in real time.
 
+### 4b. Enable AI integrations (optional but recommended)
+
+These integrations dramatically improve model quality. Configure them in **Blender > Edit > Preferences > Add-ons > Blender MCP** (expand the addon preferences):
+
+#### Hyper3D / Rodin (AI text-to-3D and image-to-3D)
+
+Best for: characters, humanoids, organic models — generates real 3D meshes with materials from text or images.
+
+1. Get an API key from [hyper3d.ai](https://hyper3d.ai) or [fal.ai](https://fal.ai) (free trial available with limited daily generations)
+2. In the Blender MCP addon preferences, paste the key into the **Hyper3D API Key** field
+3. The app will automatically detect and use Hyper3D when the "AI Generated" method is selected
+
+#### Hunyuan3D (alternative AI generator)
+
+Tencent's alternative 3D generator. Follow the same setup as Hyper3D if you prefer this engine.
+
+#### Sketchfab (4M+ existing 3D models)
+
+Best for: real-world objects, vehicles, weapons, architecture — search and download production-quality models.
+
+1. Create a free account at [sketchfab.com](https://sketchfab.com)
+2. Go to your profile settings and copy your **API Token**
+3. In the Blender MCP addon preferences, paste it into the **Sketchfab API Token** field
+4. The app will search Sketchfab when "Library Search" method is selected or as part of the auto strategy
+
+#### Poly Haven (PBR textures, HDRIs, and models)
+
+Best for: realistic materials — metal, wood, fabric, stone textures with full PBR maps.
+
+- **Enabled by default** in blender-mcp — no API key needed
+- Used automatically during the Materials step for realistic texturing
+- Also provides free 3D models and HDRIs for environment lighting
+
+> **Tip**: For the best humanoid quality, enable Hyper3D and select "AI Generated" in the Look & Feel step. The difference vs scripted primitives is dramatic.
+
 ### 5. Start the app
 
 **Terminal 1 — backend:**
@@ -121,12 +160,12 @@ Open **http://localhost:5173** in your browser.
 
 1. In the **Settings** panel, paste your Claude API key and click **Save**
 2. Click **"Let's cast!"**
-3. **Step 1 — Look & feel**: Choose style (e.g. "low-poly videogame"), poly level, and vibe (e.g. "dark fantasy")
+3. **Step 1 — Look & feel**: Choose generation method (AI Generated / Scripted / Library Search), style, poly level, and vibe
 4. **Step 2 — Context**: Pick subject type, toggle human/creature, set pose, write a description
-5. **Step 3 — Reference image** *(optional)*: Upload a JPEG/PNG/WebP/GIF — Claude will use it as visual guidance
-6. **Step 4 — Generate**: Claude creates 3 variants in Blender via MCP (~1-2 min)
+5. **Step 3 — Reference image** *(optional)*: Upload a JPEG/PNG/WebP/GIF — used for Claude vision AND Hyper3D image-to-3D
+6. **Step 4 — Generate**: Claude creates 3 variants using the selected method (~1-3 min depending on method)
 7. **Step 5 — Pick one**: Click the variant you like best
-8. **Step 6 — Materials**: Click **Yes** to apply Principled BSDF materials, or **No** to skip
+8. **Step 6 — Materials**: Click **Yes** to apply materials (Poly Haven PBR textures if available, Principled BSDF fallback)
 9. **Step 7 — Export**: Choose OBJ or FBX, then download
 
 Your model lands in `~/Downloads/3D-Magic-Caster-exports/<session-id>/`.
@@ -168,13 +207,22 @@ Browser (React)                    Backend (FastAPI)               Blender
      |<-- { variantScreenshots: [...] } --|                           |
 ```
 
-The orchestrator (`orchestrator.py`) builds **poly-level-aware and subject-aware system prompts**:
+The orchestrator (`orchestrator.py`) builds **integration-aware system prompts** that guide Claude to:
 
-- **Low poly**: faceted aesthetic, simple geometric building blocks
-- **High poly**: subdivision surfaces (level 2-3), edge loops, detailed anatomy, quad-dominant mesh
-- **Mixed**: high detail on focal areas (face, hands), medium elsewhere
-- **Humanoid characters**: anatomical section-by-section construction, proper proportions, joint placement, pose instructions
-- **Materials step**: Principled BSDF with theme-matched colors, metallic/roughness values, optional Poly Haven textures
+1. **Check available integrations**: `get_hyper3d_status()`, `get_sketchfab_status()`, `get_polyhaven_status()`
+2. **Use AI generation when available**: Hyper3D for text-to-3D or image-to-3D, then poll and import
+3. **Search libraries for existing models**: Sketchfab (4M+ models), Poly Haven
+4. **Fall back to scripting** only when all AI tools are disabled
+5. **Post-process** with `execute_blender_code` for scale, position, posing
+
+| Generation method | Humanoid quality | Time |
+|---|---|---|
+| AI Generated (Hyper3D) | Smooth mesh with proportions, materials included | ~2-3 min |
+| AI Generated (image-to-3D) | Closely matches reference photo | ~2-3 min |
+| Library Search (Sketchfab) | Production-quality existing models | ~30s |
+| Scripted (legacy) | Basic primitives, limited anatomy | ~90s |
+
+**Materials**: Claude first checks Poly Haven availability. If enabled, it downloads PBR textures (metal, wood, fabric, etc.) and HDRIs. Falls back to Principled BSDF with manual colors.
 
 ---
 
@@ -291,7 +339,7 @@ echo "Session: $SID"
 # 1. Look & feel
 curl -s -X POST "http://127.0.0.1:3001/api/steps/$SID" \
   -H "Content-Type: application/json" -H "X-Anthropic-API-Key: $API_KEY" \
-  -d '{"step":"look_and_feel","data":{"lookAndFeel":{"style":"low-poly videogame","polyLevel":"low","vibe":"dark fantasy"}}}'
+  -d '{"step":"look_and_feel","data":{"lookAndFeel":{"style":"low-poly videogame","polyLevel":"low","vibe":"dark fantasy","generationMethod":"auto"}}}'
 
 # 2. Context
 curl -s -X POST "http://127.0.0.1:3001/api/steps/$SID" \
@@ -343,11 +391,15 @@ kill $BACKEND_PID $FRONTEND_PID 2>/dev/null
 | `Port 3001 already in use` | `kill $(lsof -ti :3001)` then restart backend |
 | `Port 9876 not open` | Open Blender > sidebar (N) > BlenderMCP > Connect |
 | `TaskGroup` error on materials | Update to latest code (fixed: session data was too large for Claude) |
-| `generate_variants` timeout | Normal — takes 1-2 min. Ensure Blender addon is connected |
+| `generate_variants` timeout | Normal — takes 1-3 min. Ensure Blender addon is connected |
 | Frontend blank page | Check browser console; ensure backend is running on 3001 |
 | `401 invalid x-api-key` | Check your API key for typos; re-paste in Settings |
 | API key not sent | Paste key in Settings panel and click Save (stored in localStorage) |
 | Reference image not used | Ensure you click "Upload reference" before clicking "Next" |
+| AI Generated produces boxy models | Hyper3D is likely not configured — check Blender MCP addon preferences for the API key |
+| Hyper3D generation fails | Check your API key quota at hyper3d.ai; free tier has limited daily generations |
+| Sketchfab search returns no results | Verify your Sketchfab API token in Blender MCP addon preferences |
+| Poly Haven textures not applied | Poly Haven should be enabled by default; check addon preferences if disabled |
 
 ## License
 

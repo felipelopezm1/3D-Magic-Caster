@@ -37,7 +37,7 @@ export interface Session {
   id: string;
   createdAt: number;
   currentStep: WizardStep;
-  lookAndFeel?: { style: string; polyLevel: string; vibe: string };
+  lookAndFeel?: { style: string; polyLevel: string; vibe: string; generationMethod?: string };
   context?: { subject: string; isHuman: boolean; posePosition?: string; description: string };
   referenceImagePath?: string;
   variantScreenshots?: string[];
